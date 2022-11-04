@@ -20,17 +20,19 @@ import com.corundumstudio.socketio.ack.AckManager;
 import com.corundumstudio.socketio.handler.ClientHead;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufInputStream;
-import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.base64.Base64;
 import io.netty.util.CharsetUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.util.LinkedList;
-import java.util.UUID;
 
 public class PacketDecoder {
+
+    private static final Logger log = LoggerFactory.getLogger(PacketDecoder.class);
 
     private final UTF8CharsScanner utf8scanner = new UTF8CharsScanner();
 
@@ -54,11 +56,11 @@ public class PacketDecoder {
 
         if (jsonIndex != null) {
             /**
-            * double escaping is required for escaped new lines because unescaping of new lines can be done safely on server-side
-            * (c) socket.io.js
-            *
-            * @see https://github.com/Automattic/socket.io-client/blob/1.3.3/socket.io.js#L2682
-            */
+             * double escaping is required for escaped new lines because unescaping of new lines can be done safely on server-side
+             * (c) socket.io.js
+             *
+             * @see https://github.com/Automattic/socket.io-client/blob/1.3.3/socket.io.js#L2682
+             */
             packet = packet.replace("\\\\n", "\\n");
 
             // skip "d="
@@ -72,8 +74,8 @@ public class PacketDecoder {
     private long readLong(ByteBuf chars, int length) {
         long result = 0;
         for (int i = chars.readerIndex(); i < chars.readerIndex() + length; i++) {
-            int digit = ((int)chars.getByte(i) & 0xF);
-            for (int j = 0; j < chars.readerIndex() + length-1-i; j++) {
+            int digit = ((int) chars.getByte(i) & 0xF);
+            for (int j = 0; j < chars.readerIndex() + length - 1 - i; j++) {
                 digit *= 10;
             }
             result += digit;
@@ -95,7 +97,7 @@ public class PacketDecoder {
     private boolean hasLengthHeader(ByteBuf buffer) {
         for (int i = 0; i < Math.min(buffer.readableBytes(), 10); i++) {
             byte b = buffer.getByte(buffer.readerIndex() + i);
-            if (b == (byte)':' && i > 0) {
+            if (b == (byte) ':' && i > 0) {
                 return true;
             }
             if (b > 57 || b < 48) {
@@ -109,9 +111,9 @@ public class PacketDecoder {
         if (isStringPacket(buffer)) {
             // TODO refactor
             int maxLength = Math.min(buffer.readableBytes(), 10);
-            int headEndIndex = buffer.bytesBefore(maxLength, (byte)-1);
+            int headEndIndex = buffer.bytesBefore(maxLength, (byte) -1);
             if (headEndIndex == -1) {
-                headEndIndex = buffer.bytesBefore(maxLength, (byte)0x3f);
+                headEndIndex = buffer.bytesBefore(maxLength, (byte) 0x3f);
             }
             int len = (int) readLong(buffer, headEndIndex);
 
@@ -121,7 +123,7 @@ public class PacketDecoder {
             return decode(client, frame);
         } else if (hasLengthHeader(buffer)) {
             // TODO refactor
-            int lengthEndIndex = buffer.bytesBefore((byte)':');
+            int lengthEndIndex = buffer.bytesBefore((byte) ':');
             int lenHeader = (int) readLong(buffer, lengthEndIndex);
             int len = utf8scanner.getActualLength(buffer, lenHeader);
 
@@ -169,12 +171,12 @@ public class PacketDecoder {
     }
 
     private void parseHeader(ByteBuf frame, Packet packet, PacketType innerType) {
-        int endIndex = frame.bytesBefore((byte)'[');
+        int endIndex = frame.bytesBefore((byte) '[');
         if (endIndex <= 0) {
             return;
         }
 
-        int attachmentsDividerIndex = frame.bytesBefore(endIndex, (byte)'-');
+        int attachmentsDividerIndex = frame.bytesBefore(endIndex, (byte) '-');
         boolean hasAttachments = attachmentsDividerIndex != -1;
         if (hasAttachments && (PacketType.BINARY_EVENT.equals(innerType)
                 || PacketType.BINARY_ACK.equals(innerType))) {
@@ -189,7 +191,7 @@ public class PacketDecoder {
         }
 
         // TODO optimize
-        boolean hasNsp = frame.bytesBefore(endIndex, (byte)',') != -1;
+        boolean hasNsp = frame.bytesBefore(endIndex, (byte) ',') != -1;
         if (hasNsp) {
             String nspAckId = readString(frame, endIndex);
             String[] parts = nspAckId.split(",");
@@ -208,7 +210,7 @@ public class PacketDecoder {
     private Packet parseBinary(ClientHead head, ByteBuf frame) throws IOException {
         if (frame.getByte(0) == 1) {
             frame.readByte();
-            int headEndIndex = frame.bytesBefore((byte)-1);
+            int headEndIndex = frame.bytesBefore((byte) -1);
             int len = (int) readLong(frame, headEndIndex);
             ByteBuf oldFrame = frame;
             frame = frame.slice(oldFrame.readerIndex() + 1, len);
@@ -285,8 +287,13 @@ public class PacketDecoder {
 
             if (packet.getSubType() == PacketType.ACK
                     || packet.getSubType() == PacketType.BINARY_ACK) {
-                ByteBufInputStream in = new ByteBufInputStream(frame);
                 AckCallback<?> callback = ackManager.getCallback(head.getSessionId(), packet.getAckId());
+                if (callback == null) {
+                    String ackPayload = readString(frame);
+                    log.debug("AckCallback not found for: {}", ackPayload);
+                    return;
+                }
+                ByteBufInputStream in = new ByteBufInputStream(frame);
                 AckArgs args = jsonSupport.readAckArgs(in, callback);
                 packet.setData(args.getArgs());
             }
